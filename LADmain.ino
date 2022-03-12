@@ -1,15 +1,3 @@
-#include <control.h>
-#include <AFMotor.h>
-
-// ultrasonic pins
-/*
- * ULTRASONIC_THRESHOLD is the minimum distance at which 
- * an object can be before it is detected as an obstacle
- */
-#define ULTRASONIC_TX 8
-#define ULTRASONIC_RX 7
-#define ULTRASONIC_THRESHOLD 10
-
 // ir pins
 /*
  * Assuming all ir sensors are wired next to one another
@@ -40,14 +28,6 @@ double line_pos   = NULL;
 double mtr_spd_l = NULL;
 double mtr_spd_r = NULL;
 
-// obstacle
-double distance = 0;
-double obstacle = false;
-
-// config motors through motor shield
-AF_DCMotor motorLeft(1, MOTOR12_1KHZ);
-AF_DCMotor motorRight(2, MOTOR12_1KHZ);
-
 /*
  * Reads the ir sensors.
  * 
@@ -61,20 +41,20 @@ void read_IR_sensors() {
   }
 }
 
-/*
- * Reads ultrasonic sensor
- * 
- * returns distance to object.
- */
-double read_ultrasonic() {
-  digitalWrite(ULTRASONIC_TX, LOW);
-  delayMicroseconds(2);
+double get_position(int values[], int n_sensors, double* weighted_sum, double* sum) {
+	*sum = 0;
+	*weighted_sum = 0;
+	for (int sensor = 0; sensor < n_sensors; sensor++) {
+		*weighted_sum += values[sensor] * (sensor + 1);
+		*sum += values[sensor];
+	}
 
-  digitalWrite(ULTRASONIC_TX, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(ULTRASONIC_TX, LOW);
-
-  return pulseIn(ULTRASONIC_RX, HIGH) * 0.034 / 2;
+	return *weighted_sum / *sum;
+}
+void control_motors(double pid_output, double factor, double speed, double* motor_left, double* motor_right) {
+	// adjust wheel power to steer toward line
+	*motor_left = (double)speed - factor * pid_output;
+	*motor_right = (double)speed + factor * pid_output;
 }
 
 void setup() {
@@ -84,53 +64,37 @@ void setup() {
   for (int pin = IR_PIN; pin < IR_PIN + N_IR_SENSORS; pin++) {
     pinMode(pin, INPUT);
   }
-
-  // setup ultrasonic pins
-  pinMode(ULTRASONIC_TX, OUTPUT);
-  pinMode(ULTRASONIC_RX, INPUT);
 }
 
 void loop() {
-  //object avoidance
-  distance = read_ultrasonic();
-  obstacle = detect_object(ULTRASONIC_THRESHOLD, distance);
+  //Line Follow
+  read_IR_sensors();
+  line_pos = get_position(ir_values, N_IR_SENSORS, &w_sum, &sum);
 
-  // stop if there is an obstacle
-  if (obstacle) {
-    mtr_spd_l = 0;
-    mtr_spd_r = 0;
-    Serial.println("OH shit an obsticle!!!");
+  // checks that line exists
+  if (line_pos != -eLadNoLine) {
+    // CENTER - line_pos shifts line position to be with respect to the center of the LAD Unit
+    control_motors(CENTER - line_pos, STEERING_SENSITIVITY, MOTOR_SPEED, &mtr_spd_l, &mtr_spd_r);
   } else {
-    
-    //Line Follow
-    read_IR_sensors();
-    line_pos = get_position(ir_values, N_IR_SENSORS, &w_sum, &sum);
-
-    // checks that line exists
-    if (line_pos != -eLadNoLine) {
-      // CENTER - line_pos shifts line position to be with respect to the center of the LAD Unit
-      control_motors(CENTER - line_pos, STEERING_SENSITIVITY, MOTOR_SPEED, &mtr_spd_l, &mtr_spd_r);
-    } else {
-      Serial.println("Recalculating...");
-    }
+    Serial.println("Recalculating...");
+  }
 
     // drive motor
-    if (mtr_spd_l > 0 && mtr_spd_r > 0) {
-      motorLeft.setSpeed(mtr_spd_l);
-      motorRight.setSpeed(mtr_spd_r);
+  if (mtr_spd_l > 0 && mtr_spd_r > 0) {
+    motorLeft.setSpeed(mtr_spd_l);
+    motorRight.setSpeed(mtr_spd_r);
   
-      motorLeft.run(FORWARD);
-      motorRight.run(FORWARD);
-    } else {
-      motorLeft.run(RELEASE);
-      motorRight.run(RELEASE);
-    }
-    
-    Serial.print(mtr_spd_l);
-    Serial.print("% ");
-    Serial.print(mtr_spd_r);
-    Serial.println("%");
+    motorLeft.run(FORWARD);
+    motorRight.run(FORWARD);
+  } else {
+    motorLeft.run(RELEASE);
+    motorRight.run(RELEASE);
   }
+    
+  Serial.print(mtr_spd_l);
+  Serial.print("% ");
+  Serial.print(mtr_spd_r);
+  Serial.println("%");
 
   delay(500);
 }
